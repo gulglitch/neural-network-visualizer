@@ -4,7 +4,7 @@ An interactive tool to visualize forward propagation in neural networks. Runs in
 
 ## Demo
 
-[Your video here]
+https://github.com/user-attachments/assets/df09e123-b5db-4fdb-bf1f-74ef1bbd26f1
 
 ## Features
 
