@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neural Network Visualizer</title>
+    <style>
+        :root {
+            --bg-color: #121212;
+            --panel-bg: #1e1e1e;
+            --text-color: #e0e0e0;
+            --accent: #00d4ff;
+            --accent-glow: rgba(0, 212, 255, 0.4);
+            --pos-color: #00ff9d; /* Green for positive */
+            --neg-color: #ff4d4d; /* Red for negative */
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* Layout */
+        .container {
+            display: flex;
+            flex: 1;
+            height: 100%;
+        }
+
+        /* Sidebar Control Panel */
+        .sidebar {
+            width: 300px;
+            background-color: var(--panel-bg);
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            box-shadow: 2px 0 10px rgba(0,0,0,0.5);
+            z-index: 10;
+            overflow-y: auto;
+            flex-shrink: 0; /* Prevent shrinking */
+        }
+
+        h2 { margin-top: 0; color: var(--accent); font-weight: 300; }
+        
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        label { font-size: 0.9rem; color: #aaa; }
+        
+        select, input[type="range"], button {
+            background: #333;
+            border: 1px solid #444;
+            color: white;
+            padding: 8px;
+            border-radius: 4px;
+            font-size: 1rem;
+            outline: none;
+        }
+
+        button {
+            background: var(--accent);
+            color: #000;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: none;
+            margin-top: 10px;
+        }
+
+        button:hover {
+            background: white;
+            box-shadow: 0 0 15px var(--accent-glow);
+        }
+
+        button.secondary {
+            background: #444;
+            color: white;
+        }
+
+        button.secondary:hover {
+            background: #555;
+            box-shadow: none;
+        }
+
+        .val-display {
+            float: right;
+            font-weight: bold;
+            color: var(--accent);
+        }
+
+        /* Main Canvas Area */
+        .main-view {
+            flex: 1;
+            position: relative;
+            background: radial-gradient(circle at center, #1a1a1a 0%, #000 100%);
+            overflow: hidden;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* Floating Tooltip */
+        #tooltip {
+            position: absolute;
+            background: rgba(0, 0, 0, 0.9);
+            border: 1px solid var(--accent);
+            padding: 8px 12px;
+            border-radius: 4px;
+            pointer-events: none;
+            display: none;
+            z-index: 100;
+            font-size: 0.9rem;
+            box-shadow: 0 0 10px rgba(0,0,0,0.5);
+            white-space: pre-line;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <!-- Controls -->
+    <div class="sidebar">
+        <h2>NN Visualizer</h2>
+        
+        <div class="control-group">
+            <label>Hidden Layers: <span id="hl-val" class="val-display">2</span></label>
+            <input type="range" id="hidden-layers" min="1" max="5" value="2">
+        </div>
+
+        <div class="control-group">
+            <label>Neurons per Layer: <span id="npl-val" class="val-display">5</span></label>
+            <input type="range" id="neurons-per-layer" min="2" max="12" value="5">
+        </div>
+
+        <div class="control-group">
+            <label>Activation Function</label>
+            <select id="activation-fn">
+                <option value="tanh">Tanh</option>
+                <option value="relu">ReLU</option>
+                <option value="sigmoid">Sigmoid</option>
+                <option value="linear">Linear</option>
+            </select>
+        </div>
+
+        <button id="btn-randomize" class="secondary">Randomize Weights</button>
+        <button id="btn-run">Run Forward Pass</button>
+
+        <div style="margin-top: auto; font-size: 0.8rem; color: #666;">
+            <p>Hover over neurons or lines to inspect values.</p>
+        </div>
+    </div>
+
+    <!-- Visualization -->
+    <div class="main-view">
+        <canvas id="nn-canvas"></canvas>
+        <div id="tooltip"></div>
+    </div>
+</div>
+
+<script>
+/* 
+ * LOGIC: Math & Neural Network Structure
+ */
+
+const activationFunctions = {
+    sigmoid: (x) => 1 / (1 + Math.exp(-x)),
+    relu: (x) => Math.max(0, x),
+    tanh: (x) => Math.tanh(x),
+    linear: (x) => x
+};
+
+const activationNames = {
+    sigmoid: "Sigmoid",
+    relu: "ReLU",
+    tanh: "Tanh",
+    linear: "Linear"
+};
+
+// Neuron Class
+class Neuron {
+    constructor(layerIndex, index) {
+        this.layerIndex = layerIndex;
+        this.index = index;
+        this.value = 0;      // The output value (after activation)
+        this.bias = (Math.random() * 2 - 1).toFixed(2); // Random bias -1 to 1
+        this.inputSum = 0;   // Weighted sum before activation
+        
+        // Visual properties
+        this.x = 0;
+        this.y = 0;
+        this.activationLevel = 0; // For animation glow (0 to 1)
+    }
+}
+
+// Connection (Edge) Class
+class Connection {
+    constructor(from, to) {
+        this.from = from; // Neuron object
+        this.to = to;     // Neuron object
+        this.weight = (Math.random() * 2 - 1); // Random weight -1 to 1
+        this.active = 0; // For animation glow
+    }
+}
+
+// Network Manager
+class NeuralNetwork {
+    constructor(inputCount, hiddenLayers, neuronsPerHidden, outputCount) {
+        this.layers = [];
+        this.connections = [];
+        
+        // 1. Create Neurons
+        // Input Layer
+        let inputLayer = [];
+        for(let i=0; i<inputCount; i++) inputLayer.push(new Neuron(0, i));
+        this.layers.push(inputLayer);
+
+        // Hidden Layers
+        for(let h=0; h<hiddenLayers; h++) {
+            let layer = [];
+            for(let i=0; i<neuronsPerHidden; i++) {
+                layer.push(new Neuron(h + 1, i));
+            }
+            this.layers.push(layer);
+        }
+
+        // Output Layer
+        let outputLayer = [];
+        for(let i=0; i<outputCount; i++) {
+            outputLayer.push(new Neuron(hiddenLayers + 1, i));
+        }
+        this.layers.push(outputLayer);
+
+        // 2. Create Connections (Fully Connected)
+        for (let i = 0; i < this.layers.length - 1; i++) {
+            const currentLayer = this.layers[i];
+            const nextLayer = this.layers[i+1];
+            
+            currentLayer.forEach(n1 => {
+                nextLayer.forEach(n2 => {
+                    this.connections.push(new Connection(n1, n2));
+                });
+            });
+        }
+    }
+
+    randomizeWeights() {
+        this.connections.forEach(c => c.weight = (Math.random() * 2 - 1));
+        this.layers.forEach(l => l.forEach(n => n.bias = (Math.random() * 2 - 1).toFixed(2)));
+    }
+}
+
+/* 
+ * VISUALIZATION: Canvas & Animation
+ */
+
+const canvas = document.getElementById('nn-canvas');
+const ctx = canvas.getContext('2d');
+const tooltip = document.getElementById('tooltip');
+let network = null;
+let animationId;
+
+// Configuration
+const CONFIG = {
+    neuronRadius: 15,
+    layerGap: 0, // Calculated dynamically
+    neuronGap: 0 // Calculated dynamically
+};
+
+// Resize Canvas
+function resize() {
+    canvas.width = canvas.parentElement.clientWidth;
+    canvas.height = canvas.parentElement.clientHeight;
+    if (network) calculatePositions();
+}
+window.addEventListener('resize', resize);
+
+// Calculate X, Y positions for neurons
+function calculatePositions() {
+    if (!network) return;
+    
+    const w = canvas.width;
+    const h = canvas.height;
+    const layerCount = network.layers.length;
+    const xStep = w / (layerCount + 1); // spacing between layers
+
+    network.layers.forEach((layer, lIndex) => {
+        const neuronCount = layer.length;
+        const yStep = h / (neuronCount + 1); // spacing between neurons
+        
+        layer.forEach((neuron, nIndex) => {
+            neuron.x = xStep * (lIndex + 1);
+            neuron.y = yStep * (nIndex + 1);
+        });
+    });
+}
+
+// Main Draw Loop
+function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    if (!network) return;
+
+    // 1. Draw Connections
+    network.connections.forEach(conn => {
+        ctx.beginPath();
+        ctx.moveTo(conn.from.x, conn.from.y);
+        ctx.lineTo(conn.to.x, conn.to.y);
+        
+        // Color based on weight (+ Green, - Red)
+        const isPos = conn.weight >= 0;
+        const baseColor = isPos ? '0, 255, 157' : '255, 77, 77';
+        
+        // Opacity logic: Base opacity + Animation glow
+        const width = Math.abs(conn.weight) * 2 + 0.5;
+        let opacity = 0.2; 
+        
+        // If active (during animation), increase opacity and width
+        if (conn.active > 0.01) {
+            opacity += conn.active;
+            ctx.shadowBlur = 10 * conn.active;
+            ctx.shadowColor = `rgba(${baseColor}, 1)`;
+        } else {
+            ctx.shadowBlur = 0;
+        }
+        
+        ctx.strokeStyle = `rgba(${baseColor}, ${opacity})`;
+        ctx.lineWidth = width;
+        ctx.stroke();
+        ctx.shadowBlur = 0; // reset
+        
+        // Decay animation
+        if(conn.active > 0) conn.active *= 0.92;
+    });
+
+    // 2. Draw Neurons
+    network.layers.forEach(layer => {
+        layer.forEach(neuron => {
+            ctx.beginPath();
+            ctx.arc(neuron.x, neuron.y, CONFIG.neuronRadius, 0, Math.PI * 2);
+            
+            // Fill color based on value/activation
+            // Normalize visual value for color intensity
+            const intensity = Math.min(1, Math.abs(neuron.value));
+            const isPos = neuron.value >= 0;
+            
+            // Base styles
+            ctx.fillStyle = '#222';
+            ctx.strokeStyle = isPos ? '#00ff9d' : '#ff4d4d';
+            ctx.lineWidth = 2;
+
+            // Animation Glow
+            if (neuron.activationLevel > 0.01) {
+                const glowColor = isPos ? '#00ff9d' : '#ff4d4d';
+                ctx.fillStyle = `rgba(255,255,255, ${neuron.activationLevel * 0.5})`;
+                ctx.shadowColor = glowColor;
+                ctx.shadowBlur = 20 * neuron.activationLevel;
+                ctx.strokeStyle = `rgba(255,255,255, ${neuron.activationLevel})`;
+            } else {
+                ctx.shadowBlur = 0;
+            }
+
+            ctx.fill();
+            ctx.stroke();
+            ctx.shadowBlur = 0; // reset
+            
+            // Decay animation
+            if(neuron.activationLevel > 0) neuron.activationLevel *= 0.95;
+        });
+    });
+
+    animationId = requestAnimationFrame(draw);
+}
+
+/* 
+ * INTERACTION: Tooltips & Mouse
+ */
+
+canvas.addEventListener('mousemove', (e) => {
+    if(!network) return;
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    
+    let hovered = false;
+
+    // Check Neurons
+    network.layers.forEach(layer => {
+        layer.forEach(n => {
+            const dist = Math.hypot(mx - n.x, my - n.y);
+            if (dist < CONFIG.neuronRadius + 5) {
+                showTooltip(e.clientX, e.clientY, 
+                    `<strong>Neuron</strong><br>Val: ${n.value.toFixed(3)}<br>Bias: ${n.bias}`);
+                hovered = true;
+            }
+        });
+    });
+
+    // Check Connections (if not on neuron)
+    if (!hovered) {
+        // Simple point-to-line distance check
+        for (let c of network.connections) {
+            const dist = distToSegment({x: mx, y: my}, c.from, c.to);
+            if (dist < 3) { // Tolerance
+                showTooltip(e.clientX, e.clientY, 
+                    `<strong>Weight</strong><br>${c.weight.toFixed(4)}`);
+                hovered = true;
+                // Highlight this connection temporarily
+                c.active = 0.5; 
+                break;
+            }
+        }
+    }
+
+    if (!hovered) hideTooltip();
+});
+
+function distToSegment(p, v, w) {
+    const l2 = (v.x - w.x)**2 + (v.y - w.y)**2;
+    if (l2 === 0) return Math.hypot(p.x - v.x, p.y - v.y);
+    let t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(p.x - (v.x + t * (w.x - v.x)), p.y - (v.y + t * (w.y - v.y)));
+}
+
+function showTooltip(x, y, html) {
+    tooltip.style.display = 'block';
+    tooltip.style.left = (x + 15) + 'px';
+    tooltip.style.top = (y + 15) + 'px';
+    tooltip.innerHTML = html;
+}
+
+function hideTooltip() {
+    tooltip.style.display = 'none';
+}
+
+/* 
+ * CONTROLLER: App Logic
+ */
+
+// UI Elements
+const ui_hl = document.getElementById('hidden-layers');
+const ui_npl = document.getElementById('neurons-per-layer');
+const ui_act = document.getElementById('activation-fn');
+const btn_rand = document.getElementById('btn-randomize');
+const btn_run = document.getElementById('btn-run');
+
+// Update Labels
+ui_hl.oninput = function() { document.getElementById('hl-val').textContent = this.value; initNetwork(); }
+ui_npl.oninput = function() { document.getElementById('npl-val').textContent = this.value; initNetwork(); }
+
+function initNetwork() {
+    const hiddenLayers = parseInt(ui_hl.value);
+    const neuronsPerLayer = parseInt(ui_npl.value);
+    // Fixed Input: 4, Output: 2 for this visualizer
+    network = new NeuralNetwork(4, hiddenLayers, neuronsPerLayer, 2);
+    resize(); // Calculate positions
+}
+
+btn_rand.onclick = () => {
+    network.randomizeWeights();
+    // Reset values visually
+    network.layers.forEach(l => l.forEach(n => { n.value = 0; n.activationLevel = 0; }));
+};
+
+// Animation Helper
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+btn_run.onclick = async () => {
+    if(btn_run.disabled) return;
+    btn_run.disabled = true;
+    btn_run.textContent = "Running...";
+
+    const actFnName = ui_act.value;
+    const actFn = activationFunctions[actFnName];
+
+    // 1. Set Random Inputs
+    const inputLayer = network.layers[0];
+    inputLayer.forEach(n => {
+        n.value = (Math.random() > 0.5 ? 1 : 0); // Binary inputs for clarity, or use Math.random()
+        n.activationLevel = 1.0; // Flash input
+    });
+
+    // Animation pause
+    await sleep(400);
+
+    // 2. Propagate
+    for (let i = 1; i < network.layers.length; i++) {
+        const prevLayer = network.layers[i-1];
+        const currLayer = network.layers[i];
+        
+        // Light up connections coming into this layer
+        network.connections.forEach(c => {
+            if (currLayer.includes(c.to)) {
+                c.active = 1.0;
+            }
+        });
+
+        await sleep(300); // Wait for connection flash
+
+        // Calculate values
+        for (let neuron of currLayer) {
+            let sum = 0;
+            // Find connections pointing to this neuron
+            network.connections.filter(c => c.to === neuron).forEach(c => {
+                sum += c.from.value * c.weight;
+            });
+            
+            neuron.inputSum = sum + parseFloat(neuron.bias);
+            neuron.value = actFn(neuron.inputSum);
+            
+            // Trigger visual glow
+            neuron.activationLevel = 1.0;
+        }
+        
+        await sleep(400); // Wait for neuron flash
+    }
+
+    btn_run.disabled = false;
+    btn_run.textContent = "Run Forward Pass";
+};
+
+// Initialize
+initNetwork();
+resize();
+draw();
+
+</script>
+
+</body>
+</html>
